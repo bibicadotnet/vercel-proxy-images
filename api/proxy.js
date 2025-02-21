@@ -1,50 +1,82 @@
-export default async function handler(req, res) {
-  try {
-    const url = new URL(req.url, `https://${req.headers.host}`);
-    
-    if (url.hostname === 'i.bibica.net') {
-      let targetUrl, serviceInfo;
-      
+export default async function handler(req) {
+  const url = new URL(req.url);
+  
+  // Chỉ xử lý các request tới i.bibica.net
+  if (url.hostname === 'i.bibica.net') {
+    try {
       if (url.pathname.startsWith('/avatar')) {
-        targetUrl = new URL(url.pathname.replace('/avatar', ''), 'https://secure.gravatar.com/avatar');
-        serviceInfo = 'Vercel & Gravatar';
+        // Chuyển hướng avatar sang Gravatar
+        const gravatarUrl = new URL(req.url);
+        gravatarUrl.hostname = 'secure.gravatar.com';
+        gravatarUrl.pathname = '/avatar' + url.pathname.replace('/avatar', '');
+        
+        const gravatarResponse = await fetch(gravatarUrl, {
+          headers: {
+            'Accept': req.headers.get('Accept') || '*/*'
+          }
+        });
+
+        return new Response(gravatarResponse.body, {
+          headers: {
+            'content-type': 'image/webp',
+            'link': gravatarResponse.headers.get('link'),
+            'X-Cache': gravatarResponse.headers.get('x-nc'),
+            'X-Served-By': 'Vercel Edge & Gravatar'
+          }
+        });
+
       } else if (url.pathname.startsWith('/comment')) {
-        targetUrl = new URL(url.pathname.replace('/comment', ''), 'https://i0.wp.com/comment.bibica.net/static/images');
-        serviceInfo = 'Vercel & Artalk & Jetpack';
+        // Chuyển hướng comment images sang WordPress.com
+        const commentUrl = new URL(req.url);
+        commentUrl.hostname = 'i0.wp.com';
+        commentUrl.pathname = '/comment.bibica.net/static/images' + url.pathname.replace('/comment', '');
+        
+        const commentResponse = await fetch(commentUrl, {
+          headers: {
+            'Accept': req.headers.get('Accept') || '*/*'
+          }
+        });
+
+        return new Response(commentResponse.body, {
+          headers: {
+            'content-type': 'image/webp',
+            'link': commentResponse.headers.get('link'),
+            'X-Cache': commentResponse.headers.get('x-nc'),
+            'X-Served-By': 'Vercel Edge & Artalk & Jetpack'
+          }
+        });
+
       } else {
-        targetUrl = new URL(url.pathname, 'https://i0.wp.com/bibica.net/wp-content/uploads');
-        serviceInfo = 'Vercel & Jetpack';
+        // Chuyển hướng mặc định sang WordPress.com
+        const wpUrl = new URL(req.url);
+        wpUrl.hostname = 'i0.wp.com';
+        wpUrl.pathname = '/bibica.net/wp-content/uploads' + url.pathname;
+        wpUrl.search = url.search;
+        
+        const imageResponse = await fetch(wpUrl, {
+          headers: {
+            'Accept': req.headers.get('Accept') || '*/*'
+          }
+        });
+
+        return new Response(imageResponse.body, {
+          headers: {
+            'content-type': 'image/webp',
+            'link': imageResponse.headers.get('link'),
+            'X-Cache': imageResponse.headers.get('x-nc'),
+            'X-Served-By': 'Vercel Edge & Jetpack'
+          }
+        });
       }
-      
-      targetUrl.search = url.search;
-      
-      const response = await fetch(targetUrl.toString(), {
-        headers: { 'Accept': req.headers.accept || '*/*' }
+    } catch (error) {
+      return new Response(`Error processing request: ${error.message}`, {
+        status: 500
       });
-
-      if (!response.ok) {
-        throw new Error(`Upstream server responded with ${response.status}`);
-      }
-
-      const buffer = await response.arrayBuffer();
-
-      res.setHeader('Content-Type', 'image/webp');
-      res.setHeader('Link', response.headers.get('link'));
-      res.setHeader('X-Cache', response.headers.get('x-nc'));
-      res.setHeader('X-Served-By', serviceInfo);
-      
-      return res.status(200).send(Buffer.from(buffer));
     }
-
-    return res.status(404).json({
-      error: `Request not supported: ${url.hostname} does not match any rules.`
-    });
-
-  } catch (error) {
-    console.error('Proxy error:', error);
-    return res.status(500).json({
-      error: 'Internal server error',
-      message: error.message
-    });
   }
+
+  // Trả về lỗi 404 nếu không khớp với bất kỳ quy tắc nào
+  return new Response(`Request not supported: ${url.hostname} does not match any rules.`, {
+    status: 404
+  });
 }
