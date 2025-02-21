@@ -1,82 +1,63 @@
-export default async function handler(req) {
-  const url = new URL(req.url);
-  
-  // Chỉ xử lý các request tới i.bibica.net
-  if (url.hostname === 'i.bibica.net') {
-    try {
-      if (url.pathname.startsWith('/avatar')) {
+// api/proxy.js
+const { parse } = require('url');
+
+module.exports = async (req, res) => {
+  try {
+    const { hostname, pathname, search } = parse(req.url);
+    
+    // Kiểm tra nếu request đến từ i.bibica.net
+    if (hostname === 'i.bibica.net' || req.headers.host === 'i.bibica.net') {
+      let targetUrl;
+      let customHeaders = {
+        'content-type': 'image/webp',
+        'X-Served-By': 'Vercel Serverless'
+      };
+
+      if (pathname.startsWith('/avatar')) {
         // Chuyển hướng avatar sang Gravatar
-        const gravatarUrl = new URL(req.url);
-        gravatarUrl.hostname = 'secure.gravatar.com';
-        gravatarUrl.pathname = '/avatar' + url.pathname.replace('/avatar', '');
-        
-        const gravatarResponse = await fetch(gravatarUrl, {
-          headers: {
-            'Accept': req.headers.get('Accept') || '*/*'
-          }
-        });
-
-        return new Response(gravatarResponse.body, {
-          headers: {
-            'content-type': 'image/webp',
-            'link': gravatarResponse.headers.get('link'),
-            'X-Cache': gravatarResponse.headers.get('x-nc'),
-            'X-Served-By': 'Vercel Edge & Gravatar'
-          }
-        });
-
-      } else if (url.pathname.startsWith('/comment')) {
-        // Chuyển hướng comment images sang WordPress.com
-        const commentUrl = new URL(req.url);
-        commentUrl.hostname = 'i0.wp.com';
-        commentUrl.pathname = '/comment.bibica.net/static/images' + url.pathname.replace('/comment', '');
-        
-        const commentResponse = await fetch(commentUrl, {
-          headers: {
-            'Accept': req.headers.get('Accept') || '*/*'
-          }
-        });
-
-        return new Response(commentResponse.body, {
-          headers: {
-            'content-type': 'image/webp',
-            'link': commentResponse.headers.get('link'),
-            'X-Cache': commentResponse.headers.get('x-nc'),
-            'X-Served-By': 'Vercel Edge & Artalk & Jetpack'
-          }
-        });
-
-      } else {
-        // Chuyển hướng mặc định sang WordPress.com
-        const wpUrl = new URL(req.url);
-        wpUrl.hostname = 'i0.wp.com';
-        wpUrl.pathname = '/bibica.net/wp-content/uploads' + url.pathname;
-        wpUrl.search = url.search;
-        
-        const imageResponse = await fetch(wpUrl, {
-          headers: {
-            'Accept': req.headers.get('Accept') || '*/*'
-          }
-        });
-
-        return new Response(imageResponse.body, {
-          headers: {
-            'content-type': 'image/webp',
-            'link': imageResponse.headers.get('link'),
-            'X-Cache': imageResponse.headers.get('x-nc'),
-            'X-Served-By': 'Vercel Edge & Jetpack'
-          }
-        });
+        targetUrl = new URL(`https://secure.gravatar.com/avatar${pathname.replace('/avatar', '')}${search || ''}`);
+        customHeaders['X-Served-By'] = 'Vercel Serverless & Gravatar';
+      } 
+      else if (pathname.startsWith('/comment')) {
+        // Chuyển hướng comment images
+        targetUrl = new URL(`https://i0.wp.com/comment.bibica.net/static/images${pathname.replace('/comment', '')}${search || ''}`);
+        customHeaders['X-Served-By'] = 'Vercel Serverless & Artalk & Jetpack';
+      } 
+      else {
+        // Chuyển hướng mặc định
+        targetUrl = new URL(`https://i0.wp.com/bibica.net/wp-content/uploads${pathname}${search || ''}`);
+        customHeaders['X-Served-By'] = 'Vercel Serverless & Jetpack';
       }
-    } catch (error) {
-      return new Response(`Error processing request: ${error.message}`, {
-        status: 500
-      });
-    }
-  }
 
-  // Trả về lỗi 404 nếu không khớp với bất kỳ quy tắc nào
-  return new Response(`Request not supported: ${url.hostname} does not match any rules.`, {
-    status: 404
-  });
-}
+      const fetchResponse = await fetch(targetUrl.toString(), {
+        headers: {
+          'Accept': req.headers['accept'] || '*/*'
+        }
+      });
+
+      if (!fetchResponse.ok) {
+        throw new Error(`Upstream server responded with ${fetchResponse.status}`);
+      }
+
+      const imageBuffer = await fetchResponse.arrayBuffer();
+
+      // Copy relevant headers from the upstream response
+      if (fetchResponse.headers.get('link')) {
+        customHeaders['link'] = fetchResponse.headers.get('link');
+      }
+      if (fetchResponse.headers.get('x-nc')) {
+        customHeaders['X-Cache'] = fetchResponse.headers.get('x-nc');
+      }
+
+      res.writeHead(200, customHeaders);
+      res.end(Buffer.from(imageBuffer));
+    } else {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end(`Request not supported: ${hostname} does not match any rules.`);
+    }
+  } catch (error) {
+    console.error('Proxy error:', error);
+    res.writeHead(500, { 'Content-Type': 'text/plain' });
+    res.end(`Internal server error: ${error.message}`);
+  }
+};
